@@ -14,14 +14,23 @@ This tool converts NAT rules from Checkpoint R81.x format to Cisco ASA format. I
   - Host objects (single IP)
   - Network objects (subnets)
   - Group objects (with nested members)
+  - Unknown types (uses name field as fallback)
 - Skips automatic generated rules
 - Generates proper ASA configurations including access lists
 - Supports both source and destination NAT
+- Preserves rule comments and section organization
+- Includes rule UUIDs for traceability
+- Comprehensive logging and error handling
+- Detailed translation statistics
 
 ## Requirements
 
 - Python 3.7+
-- Required packages (see requirements.txt)
+- Required packages:
+  - pydantic
+  - typing
+  - logging
+  - json
 
 ## Installation
 
@@ -47,6 +56,7 @@ This will:
 3. Convert the rules to ASA format
 4. Save the converted rules to the output file
 5. Provide progress feedback during the conversion
+6. Generate detailed logs and statistics
 
 ### Method 2: Programmatic Usage (For Integration)
 
@@ -79,7 +89,7 @@ translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
         "uid": "string",
         "name": "string",
         "type": "nat-section" | "nat-rule",
-        "method": "hide" | "static",
+        "method": "hide" | "static" | "no-nat",
         "auto-generated": boolean,
         "translated-destination": "uuid",
         "original-service": "uuid",
@@ -88,7 +98,9 @@ translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
         "enabled": boolean,
         "rule-number": number,
         "original-destination": "uuid",
-        "original-source": "uuid"
+        "original-source": "uuid",
+        "Comments": "string",
+        "section-uid": "string"
     }
 ]
 ```
@@ -98,7 +110,8 @@ translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
 [
     {
         "uid": "string",
-        "type": "host" | "network" | "group",
+        "type": "host" | "network" | "group" | "global" | "cpmi",
+        "name": "string",
         "ipv4-address": "x.x.x.x",  // for host type
         "subnet4": "x.x.x.x/y",     // for network type
         "members": ["uuid1", "uuid2"] // for group type
@@ -109,6 +122,8 @@ translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
 ## Output Format
 
 The output will be a text file containing ASA-compatible NAT rules, including:
+- Section headers preserving Checkpoint organization
+- Rule comments with both original comments and UUIDs
 - Static NAT rules
 - No-NAT rules with corresponding access lists
 - Pool NAT rules with global pools and access lists
@@ -118,7 +133,12 @@ Example output:
 ! Generated ASA NAT Rules from Checkpoint R81.x
 ! ============================================
 
+! Checkpoint NAT Section: Internet Access
+! Rule: Allow web access | UUID: abc123
 static (inside,outside) 10.0.0.1 192.168.1.1 netmask 255.255.255.255
+
+! Checkpoint NAT Section: Internal Services
+! Rule: NA | UUID: def456
 access-list NO_NAT_Rule1 extended permit ip 192.168.1.0 255.255.255.0 any
 nat (inside,outside) 0 access-list NO_NAT_Rule1
 ```
@@ -142,12 +162,35 @@ The converter includes comprehensive error handling:
 - Logs unhandled rules and conversion issues
 - Provides detailed error messages for troubleshooting
 - Handles missing or invalid object references
+- Tracks and reports translation statistics
 
 ## Logging
 
 The converter generates detailed logs in a file named `nat_translation_YYYYMMDD_HHMMSS.log` containing:
 - Conversion progress
+- Rule processing status
 - Unhandled rules
 - Validation errors
 - Object resolution issues
-- General conversion statistics 
+- Translation errors
+- General conversion statistics
+
+### Log Format Examples
+
+```
+Rule 1 loaded successfully
+Rule 2 skipped - Rule is disabled
+Rule 3 skipped - Auto-generated rule
+Rule 4 failed - Object resolution error: Invalid object type
+Rule 5 translated successfully to static NAT
+Rule 6 translation failed - Handler returned no rule
+Rule 7 translation failed - Error: Invalid IP address
+
+Translation Statistics:
+Total rules processed: 100
+Successfully translated: 85
+Failed translations: 10
+Skipped rules: 5
+Object resolution errors: 3
+Translation errors: 7
+``` 
