@@ -1,4 +1,4 @@
-from nat_translator import NATHandler
+from base_handler import NATHandler
 from typing import Dict, Any
 
 class StaticNATHandler(NATHandler):

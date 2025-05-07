@@ -123,12 +123,4 @@ class NATTranslator:
             for rule in asa_rules:
                 f.write(rule)
                 
-        self.logger.info(f"Successfully saved {len(asa_rules)} ASA rules to {output_file}")
-
-class NATHandler(ABC):
-    """Abstract base class for NAT handlers"""
-    
-    @abstractmethod
-    def translate(self, rule: Dict[str, Any]) -> str:
-        """Translate a NAT rule to ASA format"""
-        pass 
+        self.logger.info(f"Successfully saved {len(asa_rules)} ASA rules to {output_file}") 

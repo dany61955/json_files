@@ -38,3 +38,9 @@ def main():
 
 if __name__ == "__main__":
     main() 
+
+# Programmatic usage
+translator = NATTranslator()
+checkpoint_rules = translator.load_checkpoint_rules('checkpoint_nat_policy.json')
+asa_rules = translator.translate_rules(checkpoint_rules)
+translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
