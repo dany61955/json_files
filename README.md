@@ -9,6 +9,11 @@ This tool converts NAT rules from Checkpoint R81.x format to Cisco ASA format. I
   - Static NAT (85% of rules)
   - No-NAT rules (10% of rules)
   - Pool NAT rules
+- Resolves object UUIDs to actual values (IPs, networks, services)
+- Supports different object types:
+  - Host objects (single IP)
+  - Network objects (subnets)
+  - Group objects (with nested members)
 - Skips automatic generated rules
 - Generates proper ASA configurations including access lists
 - Supports both source and destination NAT
@@ -33,14 +38,15 @@ pip install -r requirements.txt
 Use `convertor.py` for simple command-line conversion:
 
 ```bash
-python convertor.py checkpoint_nat_policy.json asa_nat_rules.txt
+python convertor.py nat_rules.json objects.json asa_nat_rules.txt
 ```
 
 This will:
-1. Load the Checkpoint NAT rules from the input JSON file
-2. Convert them to ASA format
-3. Save the converted rules to the output file
-4. Provide progress feedback during the conversion
+1. Load the Checkpoint NAT rules and objects from their respective JSON files
+2. Resolve all object UUIDs to their actual values
+3. Convert the rules to ASA format
+4. Save the converted rules to the output file
+5. Provide progress feedback during the conversion
 
 ### Method 2: Programmatic Usage (For Integration)
 
@@ -51,45 +57,53 @@ Use `programmatic_usage.py` when you need to:
 
 Basic usage:
 ```python
-from programmatic_usage import convert_nat_rules
+from nat_translator import NATTranslator
 
-# Convert a single file
-rules = convert_nat_rules('checkpoint_nat_policy.json', 'asa_nat_rules.txt')
-```
+# Initialize the translator with objects file
+translator = NATTranslator(objects_file='objects.json')
 
-Process multiple files:
-```python
-from programmatic_usage import process_multiple_files
+# Load and convert rules
+checkpoint_rules = translator.load_checkpoint_rules('nat_rules.json')
+asa_rules = translator.translate_rules(checkpoint_rules)
 
-# Convert multiple files
-input_files = ['policy1.json', 'policy2.json']
-results = process_multiple_files(input_files, 'output_directory')
+# Save the converted rules
+translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
 ```
 
 ## Input Format
 
-The input should be a JSON file containing Checkpoint NAT rules with the following structure:
+### NAT Rules JSON Format
 ```json
-{
-    "nat-policy": [
-        {
-            "type": "user-defined",
-            "rules": [
-                {
-                    "name": "rule_name",
-                    "source": {
-                        "ip": "192.168.1.1"
-                    },
-                    "destination": {
-                        "ip": "10.0.0.1"
-                    },
-                    "service": "any",
-                    "action": "static"
-                }
-            ]
-        }
-    ]
-}
+[
+    {
+        "uid": "string",
+        "name": "string",
+        "type": "nat-section" | "nat-rule",
+        "method": "hide" | "static",
+        "auto-generated": boolean,
+        "translated-destination": "uuid",
+        "original-service": "uuid",
+        "translated-source": "uuid",
+        "translated-service": "uuid",
+        "enabled": boolean,
+        "rule-number": number,
+        "original-destination": "uuid",
+        "original-source": "uuid"
+    }
+]
+```
+
+### Objects JSON Format
+```json
+[
+    {
+        "uid": "string",
+        "type": "host" | "network" | "group",
+        "ipv4-address": "x.x.x.x",  // for host type
+        "subnet4": "x.x.x.x/y",     // for network type
+        "members": ["uuid1", "uuid2"] // for group type
+    }
+]
 ```
 
 ## Output Format
@@ -115,6 +129,7 @@ nat (inside,outside) 0 access-list NO_NAT_Rule1
 - `programmatic_usage.py`: Programmatic interface for integration and batch processing
 - `nat_translator.py`: Main translator class and NAT rule model
 - `nat_handlers.py`: Handlers for different types of NAT rules
+- `object_resolver.py`: Resolves object UUIDs to actual values
 - `utils.py`: Utility functions for validation and formatting
 - `requirements.txt`: Project dependencies
 - `README.md`: Project documentation
@@ -126,6 +141,7 @@ The converter includes comprehensive error handling:
 - Handles file not found errors
 - Logs unhandled rules and conversion issues
 - Provides detailed error messages for troubleshooting
+- Handles missing or invalid object references
 
 ## Logging
 
@@ -133,4 +149,5 @@ The converter generates detailed logs in a file named `nat_translation_YYYYMMDD_
 - Conversion progress
 - Unhandled rules
 - Validation errors
+- Object resolution issues
 - General conversion statistics 

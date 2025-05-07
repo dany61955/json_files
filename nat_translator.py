@@ -6,21 +6,27 @@ from datetime import datetime
 from pydantic import BaseModel
 from nat_handlers import StaticNATHandler, NoNATHandler, PoolNATHandler
 from utils import validate_checkpoint_json, format_asa_rule, log_unhandled_rule
+from object_resolver import ObjectResolver
 
 class NATRule(BaseModel):
     """Base model for NAT rules"""
-    name: str
-    source: str
-    destination: str
-    service: str
-    action: str
+    uid: str
     type: str
-    auto_generated: bool = False
+    method: str
+    auto_generated: bool
+    translated_destination: str
+    original_service: str
+    translated_source: str
+    translated_service: str
+    enabled: bool
+    rule_number: int
+    original_destination: str
+    original_source: str
 
 class NATTranslator:
     """Main class for translating NAT rules from Checkpoint to ASA"""
     
-    def __init__(self, log_file: str = None):
+    def __init__(self, objects_file: str = None, log_file: str = None):
         self.handlers = {
             'static': StaticNATHandler(),
             'no_nat': NoNATHandler(),
@@ -37,6 +43,9 @@ class NATTranslator:
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize object resolver if objects file is provided
+        self.object_resolver = ObjectResolver(objects_file) if objects_file else None
     
     def load_checkpoint_rules(self, file_path: str) -> List[Dict[str, Any]]:
         """Load NAT rules from Checkpoint JSON file"""
@@ -52,13 +61,18 @@ class NATTranslator:
         # Extract NAT rules from the policy
         nat_rules = []
         
-        # Process user-defined rules first
-        if 'nat-policy' in data:
-            for section in data['nat-policy']:
-                if section.get('type') == 'user-defined':
-                    for rule in section.get('rules', []):
-                        rule['auto_generated'] = False
-                        nat_rules.append(rule)
+        # Process only nat-rule type entries
+        for rule in data:
+            if rule.get('type') == 'nat-rule':
+                # Skip disabled rules and auto-generated rules
+                if not rule.get('enabled', True) or rule.get('auto-generated', False):
+                    continue
+                    
+                # Resolve object UUIDs if resolver is available
+                if self.object_resolver:
+                    rule = self.object_resolver.resolve_rule_objects(rule)
+                    
+                nat_rules.append(rule)
         
         return nat_rules
     
@@ -67,10 +81,6 @@ class NATTranslator:
         asa_rules = []
         
         for rule in checkpoint_rules:
-            # Skip automatic rules
-            if rule.get('auto_generated', False):
-                continue
-                
             # Determine NAT type based on rule properties
             nat_type = self._determine_nat_type(rule)
             handler = self.handlers.get(nat_type)
@@ -78,7 +88,7 @@ class NATTranslator:
             if handler:
                 asa_rule = handler.translate(rule)
                 if asa_rule:
-                    asa_rules.append(format_asa_rule(asa_rule, f"Rule: {rule.get('name')}"))
+                    asa_rules.append(format_asa_rule(asa_rule, f"Rule: {rule.get('uid')}"))
             else:
                 log_unhandled_rule(self.logger, rule, f"No handler found for NAT type: {nat_type}")
         
@@ -86,30 +96,22 @@ class NATTranslator:
     
     def _determine_nat_type(self, rule: Dict[str, Any]) -> str:
         """Determine the NAT type based on rule properties"""
-        # Check for no-NAT rules first
-        if rule.get('action') == 'no-nat' or rule.get('type') == 'no-nat':
+        method = rule.get('method', '').lower()
+        
+        # Check for no-NAT rules
+        if method == 'no-nat':
             return 'no_nat'
             
         # Check for pool NAT rules
-        if (rule.get('action') == 'hide' or 
-            rule.get('type') == 'hide' or 
-            'pool' in rule.get('translation', {})):
+        if method == 'hide':
             return 'pool'
             
         # Check for static NAT rules
-        if (rule.get('action') == 'static' or 
-            rule.get('type') == 'static' or 
-            (rule.get('translation', {}).get('method') == 'static')):
-            return 'static'
-            
-        # Additional checks for static NAT based on rule structure
-        translation = rule.get('translation', {})
-        if (translation.get('original') and translation.get('translated') and
-            not isinstance(translation.get('translated'), list)):
+        if method == 'static':
             return 'static'
             
         # Log unhandled NAT type
-        log_unhandled_rule(self.logger, rule, "Could not determine NAT type, defaulting to static")
+        log_unhandled_rule(self.logger, rule, f"Could not determine NAT type for method: {method}, defaulting to static")
         return 'static'
     
     def save_asa_rules(self, asa_rules: List[str], output_file: str):

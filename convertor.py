@@ -7,18 +7,19 @@ import sys
 def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Convert Checkpoint NAT rules to ASA format')
-    parser.add_argument('input_file', help='Path to the Checkpoint NAT policy JSON file')
+    parser.add_argument('nat_rules_file', help='Path to the Checkpoint NAT rules JSON file')
+    parser.add_argument('objects_file', help='Path to the Checkpoint objects JSON file')
     parser.add_argument('output_file', help='Path to save the ASA NAT rules')
     
     args = parser.parse_args()
     
     try:
-        # Initialize the translator
-        translator = NATTranslator()
+        # Initialize the translator with objects file
+        translator = NATTranslator(objects_file=args.objects_file)
         
         # Load and convert rules
-        print(f"Loading Checkpoint rules from {args.input_file}...")
-        checkpoint_rules = translator.load_checkpoint_rules(args.input_file)
+        print(f"Loading Checkpoint rules from {args.nat_rules_file}...")
+        checkpoint_rules = translator.load_checkpoint_rules(args.nat_rules_file)
         
         print("Converting rules to ASA format...")
         asa_rules = translator.translate_rules(checkpoint_rules)
@@ -38,9 +39,3 @@ def main():
 
 if __name__ == "__main__":
     main() 
-
-# Programmatic usage
-translator = NATTranslator()
-checkpoint_rules = translator.load_checkpoint_rules('checkpoint_nat_policy.json')
-asa_rules = translator.translate_rules(checkpoint_rules)
-translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
