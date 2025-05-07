@@ -15,11 +15,15 @@ This tool converts NAT rules from Checkpoint R81.x format to Cisco ASA format. I
   - Network objects (subnets)
   - Group objects (with nested members)
   - Unknown types (uses name field as fallback)
-- Skips automatic generated rules
-- Generates proper ASA configurations including access lists
+- Skips automatic generated rules and disabled rules
+- Generates proper ASA configurations including:
+  - Access lists with sequential numbering (NAT_ACL_0001, NAT_ACL_0002, etc.)
+  - Static NAT rules with proper interfaces
+  - No-NAT rules with access lists
+  - Pool NAT rules with global pools
 - Supports both source and destination NAT
 - Preserves rule comments and section organization
-- Includes rule UUIDs for traceability
+- Includes rule numbers and UUIDs for traceability
 - Comprehensive logging and error handling
 - Detailed translation statistics
 
@@ -123,10 +127,11 @@ translator.save_asa_rules(asa_rules, 'asa_nat_rules.txt')
 
 The output will be a text file containing ASA-compatible NAT rules, including:
 - Section headers preserving Checkpoint organization
-- Rule comments with both original comments and UUIDs
-- Static NAT rules
-- No-NAT rules with corresponding access lists
-- Pool NAT rules with global pools and access lists
+- Rule comments with rule numbers and UUIDs
+- Access lists with sequential numbering
+- Static NAT rules with proper interfaces
+- No-NAT rules with access lists
+- Pool NAT rules with global pools
 
 Example output:
 ```
@@ -134,13 +139,20 @@ Example output:
 ! ============================================
 
 ! Checkpoint NAT Section: Internet Access
-! Rule: Allow web access | UUID: abc123
-static (inside,outside) 10.0.0.1 192.168.1.1 netmask 255.255.255.255
+! Rule 0001: Allow web access | UUID: abc123
+access-list NAT_ACL_0001 extended permit any 192.168.1.0 10.0.0.0
+static (inside,outside) 172.16.1.0 192.168.1.0 netmask 255.255.255.255
 
 ! Checkpoint NAT Section: Internal Services
-! Rule: NA | UUID: def456
-access-list NO_NAT_Rule1 extended permit ip 192.168.1.0 255.255.255.0 any
-nat (inside,outside) 0 access-list NO_NAT_Rule1
+! Rule 0002: NA | UUID: def456
+access-list NAT_ACL_0002 extended permit any 192.168.1.0 any
+nat (inside,outside) 0 access-list NAT_ACL_0002
+
+! Checkpoint NAT Section: Pool NAT
+! Rule 0003: Pool NAT example | UUID: ghi789
+access-list NAT_ACL_0003 extended permit any 192.168.1.0 any
+global (outside) NAT_POOL_0003 172.16.1.0 netmask 255.255.255.0
+nat (inside) 1 access-list NAT_ACL_0003
 ```
 
 ## Project Structure
@@ -162,6 +174,7 @@ The converter includes comprehensive error handling:
 - Logs unhandled rules and conversion issues
 - Provides detailed error messages for troubleshooting
 - Handles missing or invalid object references
+- Uses name field as fallback for unknown object types
 - Tracks and reports translation statistics
 
 ## Logging
@@ -178,13 +191,13 @@ The converter generates detailed logs in a file named `nat_translation_YYYYMMDD_
 ### Log Format Examples
 
 ```
-Rule 1 loaded successfully
-Rule 2 skipped - Rule is disabled
-Rule 3 skipped - Auto-generated rule
-Rule 4 failed - Object resolution error: Invalid object type
-Rule 5 translated successfully to static NAT
-Rule 6 translation failed - Handler returned no rule
-Rule 7 translation failed - Error: Invalid IP address
+2024-03-21 10:15:30 - INFO - Rule 0001 loaded successfully
+2024-03-21 10:15:30 - INFO - Rule 0002 skipped - Rule is disabled
+2024-03-21 10:15:30 - INFO - Rule 0003 skipped - Auto-generated rule
+2024-03-21 10:15:30 - ERROR - Rule 0004 failed - Object resolution error: Invalid object type
+2024-03-21 10:15:30 - INFO - Rule 0005 translated successfully to static NAT
+2024-03-21 10:15:30 - WARNING - Rule 0006 translation failed - Handler returned no rule
+2024-03-21 10:15:30 - ERROR - Rule 0007 translation failed - Error: Invalid IP address
 
 Translation Statistics:
 Total rules processed: 100

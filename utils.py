@@ -32,12 +32,30 @@ def validate_checkpoint_json(data: List[Dict[str, Any]]) -> bool:
                 
     return True
 
-def create_asa_acl(rule: Dict[str, Any]) -> str:
-    """Create ASA access-list for NAT rules"""
-    acl_name = f"NAT_ACL_{rule.get('name', '')}"
-    source = rule.get('original-source', 'any')
-    destination = rule.get('original-destination', 'any')
-    service = rule.get('original-service', 'any')
+def create_asa_acl(rule: Dict[str, Any], use_translated: bool = False) -> str:
+    """
+    Create ASA access-list for NAT rules
+    
+    Args:
+        rule (Dict[str, Any]): The NAT rule to create ACL for
+        use_translated (bool): Whether to use translated fields instead of original fields
+        
+    Returns:
+        str: The ASA access-list configuration
+    """
+    # Use rule number for ACL name, with leading zeros for consistent formatting
+    rule_number = rule.get('rule-number', 0)
+    acl_name = f"NAT_ACL_{rule_number:04d}"
+    
+    # Choose between original and translated fields
+    if use_translated:
+        source = rule.get('translated-source', 'any')
+        destination = rule.get('translated-destination', 'any')
+        service = rule.get('translated-service', 'any')
+    else:
+        source = rule.get('original-source', 'any')
+        destination = rule.get('original-destination', 'any')
+        service = rule.get('original-service', 'any')
     
     return f"access-list {acl_name} extended permit {service} {source} {destination}"
 
@@ -72,12 +90,12 @@ def log_unhandled_rule(logger: logging.Logger, rule: Dict[str, Any], reason: str
         rule (Dict[str, Any]): The unhandled rule
         reason (str): Reason why the rule was unhandled
     """
-    rule_number = rule.get('rule-number', 'unknown')
+    rule_number = rule.get('rule-number', 0)
     rule_uid = rule.get('uid', 'unknown')
     rule_method = rule.get('method', 'unknown')
     
     logger.warning(
-        f"Unhandled rule {rule_number} (UID: {rule_uid}, Method: {rule_method}) - {reason}"
+        f"Unhandled rule {rule_number:04d} (UID: {rule_uid}, Method: {rule_method}) - {reason}"
     )
 
 def validate_ip_address(ip: str) -> bool:

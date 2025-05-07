@@ -156,16 +156,16 @@ class NATTranslator:
                     if asa_rule:
                         # Create rule comment with both comment and UUID
                         comment = rule.get('Comments', 'NA')
-                        rule_comment = f"Rule: {comment} | UUID: {rule.get('uid')}"
+                        rule_comment = f"Rule {rule_number:04d}: {comment} | UUID: {rule.get('uid')}"
                         asa_rules.append(format_asa_rule(asa_rule, rule_comment))
-                        self.logger.info(f"Rule {rule_number} translated successfully to {nat_type} NAT")
+                        self.logger.info(f"Rule {rule_number:04d} translated successfully to {nat_type} NAT")
                         self.stats['successful'] += 1
                     else:
-                        self.logger.warning(f"Rule {rule_number} translation failed - Handler returned no rule")
+                        self.logger.warning(f"Rule {rule_number:04d} translation failed - Handler returned no rule")
                         self.stats['translation_errors'] += 1
                         self.stats['failed'] += 1
                 except Exception as e:
-                    self.logger.error(f"Rule {rule_number} translation failed - Error: {str(e)}")
+                    self.logger.error(f"Rule {rule_number:04d} translation failed - Error: {str(e)}")
                     self.stats['translation_errors'] += 1
                     self.stats['failed'] += 1
             else:
