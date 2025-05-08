@@ -28,21 +28,17 @@ class StaticNATHandler(NATHandler):
     def translate(self, rule: Dict[str, Any]) -> Optional[str]:
         """Translate static NAT rule to ASA format"""
         try:
-            # Get original and translated IPs
+            # Get original and translated fields
             original_source = rule.get('original-source', '')
             translated_source = rule.get('translated-source', '')
             original_destination = rule.get('original-destination', '')
             translated_destination = rule.get('translated-destination', '')
             
-            # Get service information
-            original_service = rule.get('original-service', 'any')
-            translated_service = rule.get('translated-service', 'any')
-            
             # Get comments
             comments = rule.get('Comments', '')
             
             # Skip if this is the second part of a bidirectional pair
-            if rule.get('is_bidirectional', False) and original_source == 'any' and translated_source == 'original':
+            if rule.get('is_bidirectional', False):
                 self.logger.info(f"Skipping second part of bidirectional pair (Rule {rule.get('rule-number')})")
                 return None
             
@@ -52,13 +48,14 @@ class StaticNATHandler(NATHandler):
                 nat_rule = f"nat (inside,outside) source static {original_source} {translated_source}"
                 if original_destination != 'any' or translated_destination != 'original':
                     nat_rule += f" destination static {original_destination} {translated_destination}"
+                nat_rule += " no-proxy-arp"
                 if comments:
                     nat_rule += f" description {comments}"
                 return nat_rule
             elif original_destination and translated_destination:
                 # For destination NAT, we'll create a source NAT rule with reversed IPs
-                # This handles the bidirectional nature of ASA NAT
                 nat_rule = f"nat (inside,outside) source static {translated_destination} {original_destination}"
+                nat_rule += " no-proxy-arp"
                 if comments:
                     nat_rule += f" description {comments}"
                 return nat_rule
@@ -189,15 +186,20 @@ class ObjectResolver:
         return members
         
     def resolve_object(self, uid: str) -> Optional[str]:
-        """Resolve object UUID to its value"""
+        """Resolve object UUID to its value, preserving object names"""
         obj = self.objects.get(uid)
         if not obj:
             self.logger.warning(f"Object not found for UUID: {uid}")
             return None
             
+        # Always return the object name if available
+        name = obj.get('name')
+        if name:
+            return name
+            
+        # If no name is available, try to resolve based on type
         obj_type = obj.get('type', '').lower()
         
-        # Try to resolve based on type
         if obj_type == 'host':
             return self._resolve_host(obj)
         elif obj_type == 'network':
@@ -206,14 +208,8 @@ class ObjectResolver:
             members = self._resolve_group(obj)
             return ' '.join(members) if members else None
         else:
-            # For unknown types (global, cpmi, etc.), use the name field as fallback
-            name = obj.get('name')
-            if name:
-                self.logger.warning(f"Using name field for unknown object type '{obj_type}' with UUID: {uid}")
-                return name
-            else:
-                self.logger.warning(f"Unknown object type '{obj_type}' and no name field for UUID: {uid}")
-                return None
+            self.logger.warning(f"Unknown object type '{obj_type}' and no name field for UUID: {uid}")
+            return None
 
     def resolve_rule_objects(self, rule: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve all object UUIDs in a rule"""
@@ -432,25 +428,26 @@ class NATTranslator:
         return processed_rules
 
     def _is_bidirectional_pair(self, rule1: Dict[str, Any], rule2: Dict[str, Any]) -> bool:
-        """Check if two rules form a bidirectional pair"""
+        """Check if two rules form a bidirectional pair using the pattern:
+        Rule 1: OS=A, TS=B
+        Rule 2: OD=B, TD=A
+        """
         # Get source and destination fields
-        src1 = rule1.get('original-source', '')
-        dst1 = rule1.get('original-destination', '')
-        trans_src1 = rule1.get('translated-source', '')
-        trans_dst1 = rule1.get('translated-destination', '')
+        os1 = rule1.get('original-source', '')
+        ts1 = rule1.get('translated-source', '')
+        od1 = rule1.get('original-destination', '')
+        td1 = rule1.get('translated-destination', '')
         
-        src2 = rule2.get('original-source', '')
-        dst2 = rule2.get('original-destination', '')
-        trans_src2 = rule2.get('translated-source', '')
-        trans_dst2 = rule2.get('translated-destination', '')
+        os2 = rule2.get('original-source', '')
+        ts2 = rule2.get('translated-source', '')
+        od2 = rule2.get('original-destination', '')
+        td2 = rule2.get('translated-destination', '')
         
-        # Check if rules are bidirectional
-        if (src1 == trans_dst2 and dst1 == 'any' and trans_src1 == dst2 and trans_dst1 == 'original' and
-            src2 == 'any' and trans_src2 == 'original'):
-            return True
-            
-        if (src2 == trans_dst1 and dst2 == 'any' and trans_src2 == dst1 and trans_dst2 == 'original' and
-            src1 == 'any' and trans_src1 == 'original'):
+        # Check if rules match the bidirectional pattern
+        if (os1 == td2 and ts1 == od2):
+            self.logger.info(f"Found bidirectional pair: Rule {rule1.get('rule-number')} and Rule {rule2.get('rule-number')}")
+            self.logger.info(f"Rule {rule1.get('rule-number')}: OS={os1}, TS={ts1}")
+            self.logger.info(f"Rule {rule2.get('rule-number')}: OD={od2}, TD={td2}")
             return True
             
         return False
