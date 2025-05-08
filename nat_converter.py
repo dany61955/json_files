@@ -46,8 +46,10 @@ class StaticNATHandler(NATHandler):
             if original_source and translated_source:
                 # Create simplified static NAT rule
                 nat_rule = f"nat (inside,outside) source static {original_source} {translated_source}"
-                if original_destination != 'any' or translated_destination != 'original':
+                if original_destination != 'any' and translated_destination != 'original':
                     nat_rule += f" destination static {original_destination} {translated_destination}"
+                else:
+                    nat_rule += " destination static any any"
                 nat_rule += " no-proxy-arp"
                 if comments:
                     nat_rule += f" description \"{comments}\""
