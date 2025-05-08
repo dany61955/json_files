@@ -50,14 +50,14 @@ class StaticNATHandler(NATHandler):
                     nat_rule += f" destination static {original_destination} {translated_destination}"
                 nat_rule += " no-proxy-arp"
                 if comments:
-                    nat_rule += f" description {comments}"
+                    nat_rule += f" description \"{comments}\""
                 return nat_rule
             elif original_destination and translated_destination:
                 # For destination NAT, we'll create a source NAT rule with reversed IPs
-                nat_rule = f"nat (inside,outside) source static {translated_destination} {original_destination}"
+                nat_rule = f"nat (inside,outside) source static {translated_destination} {original_destination} destination static any any"
                 nat_rule += " no-proxy-arp"
                 if comments:
-                    nat_rule += f" description {comments}"
+                    nat_rule += f" description \"{comments}\""
                 return nat_rule
             
             self.logger.warning(f"Static NAT rule missing required fields - Source: {original_source}/{translated_source}, Destination: {original_destination}/{translated_destination}")
@@ -95,8 +95,9 @@ class NoNATHandler(NATHandler):
                     nat_rule += f" destination static {original_destination} {original_destination}"
                 else:
                     nat_rule += " destination static any any"
+                nat_rule += " no-proxy-arp"
                 if comments:
-                    nat_rule += f" description {comments}"
+                    nat_rule += f" description \"{comments}\""
                 return nat_rule
             
             self.logger.warning(f"No-NAT rule missing required fields - Source: {original_source}, Destination: {original_destination}")
@@ -636,15 +637,6 @@ class NATTranslator:
                 for rule in asa_rules:
                     f.write(rule)
                     
-            # Log final statistics
-            self.logger.info("\nTranslation Statistics:")
-            self.logger.info(f"Total rules processed: {self.stats['total_rules']}")
-            self.logger.info(f"Successfully translated: {self.stats['successful']}")
-            self.logger.info(f"Failed translations: {self.stats['failed']}")
-            self.logger.info(f"Skipped rules: {self.stats['skipped']}")
-            self.logger.info(f"Object resolution errors: {self.stats['object_errors']}")
-            self.logger.info(f"Translation errors: {self.stats['translation_errors']}")
-            
             self.logger.info(f"Successfully saved {len(asa_rules)} ASA rules to {output_file}")
             
         except Exception as e:
