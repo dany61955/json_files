@@ -38,7 +38,7 @@ class StaticNATHandler(NATHandler):
             comments = rule.get('Comments', '')
             
             # Skip if this is the second part of a bidirectional pair
-            if rule.get('is_bidirectional', False):
+            if rule.get('is_bidirectional', False) and original_source == 'any':
                 self.logger.info(f"Skipping second part of bidirectional pair (Rule {rule.get('rule-number')})")
                 return None
             
