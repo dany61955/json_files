@@ -38,19 +38,30 @@ class StaticNATHandler(NATHandler):
             original_service = rule.get('original-service', 'any')
             translated_service = rule.get('translated-service', 'any')
             
+            # Get comments
+            comments = rule.get('Comments', '')
+            
+            # Skip if this is the second part of a bidirectional pair
+            if rule.get('is_bidirectional', False) and original_source == 'any' and translated_source == 'original':
+                self.logger.info(f"Skipping second part of bidirectional pair (Rule {rule.get('rule-number')})")
+                return None
+            
             # Handle both source and destination NAT
             if original_source and translated_source:
-                # Create ACL for source NAT
-                acl = create_asa_acl(rule, use_translated=False)
-                # Create static NAT rule
-                nat_rule = f"static (inside,outside) {translated_source} {original_source} netmask 255.255.255.255"
-                return f"{acl}\n{nat_rule}"
+                # Create simplified static NAT rule
+                nat_rule = f"nat (inside,outside) source static {original_source} {translated_source}"
+                if original_destination != 'any' or translated_destination != 'original':
+                    nat_rule += f" destination static {original_destination} {translated_destination}"
+                if comments:
+                    nat_rule += f" description {comments}"
+                return nat_rule
             elif original_destination and translated_destination:
-                # Create ACL for destination NAT
-                acl = create_asa_acl(rule, use_translated=True)
-                # Create static NAT rule
-                nat_rule = f"static (inside,outside) {original_destination} {translated_destination} netmask 255.255.255.255"
-                return f"{acl}\n{nat_rule}"
+                # For destination NAT, we'll create a source NAT rule with reversed IPs
+                # This handles the bidirectional nature of ASA NAT
+                nat_rule = f"nat (inside,outside) source static {translated_destination} {original_destination}"
+                if comments:
+                    nat_rule += f" description {comments}"
+                return nat_rule
             
             self.logger.warning(f"Static NAT rule missing required fields - Source: {original_source}/{translated_source}, Destination: {original_destination}/{translated_destination}")
             return None
@@ -68,14 +79,31 @@ class NoNATHandler(NATHandler):
     def translate(self, rule: Dict[str, Any]) -> Optional[str]:
         """Translate no-NAT rule to ASA format"""
         try:
-            # Create ACL using original fields
-            acl = create_asa_acl(rule, use_translated=False)
+            # Get original and translated fields
+            original_source = rule.get('original-source', '')
+            original_destination = rule.get('original-destination', '')
             
-            # Create NAT rule using the ACL name from the ACL line
-            acl_name = acl.split()[1]  # Get the ACL name from the ACL line
-            nat_config = f"nat (inside,outside) 0 access-list {acl_name}"
+            # Get comments
+            comments = rule.get('Comments', '')
             
-            return f"{acl}\n{nat_config}"
+            # Skip if this is the second part of a No-NAT pair
+            if rule.get('is_no_nat_pair', False) and original_source == 'any':
+                self.logger.info(f"Skipping second part of No-NAT pair (Rule {rule.get('rule-number')})")
+                return None
+            
+            # Create identity NAT rule
+            if original_source and original_source != 'any':
+                nat_rule = f"nat (inside,outside) source static {original_source} {original_source}"
+                if original_destination != 'any':
+                    nat_rule += f" destination static {original_destination} {original_destination}"
+                else:
+                    nat_rule += " destination static any any"
+                if comments:
+                    nat_rule += f" description {comments}"
+                return nat_rule
+            
+            self.logger.warning(f"No-NAT rule missing required fields - Source: {original_source}, Destination: {original_destination}")
+            return None
             
         except Exception as e:
             self.logger.error(f"Error translating no-NAT rule: {str(e)}")
@@ -226,35 +254,14 @@ def validate_checkpoint_json(data: List[Dict[str, Any]]) -> bool:
     return True
 
 def create_asa_acl(rule: Dict[str, Any], use_translated: bool = False) -> str:
-    """Create ASA access-list for NAT rules"""
-    # Use rule number for ACL name, with leading zeros for consistent formatting
-    rule_number = rule.get('rule-number', 0)
-    acl_name = f"NAT_ACL_{rule_number:04d}"
-    
-    # Choose between original and translated fields
-    if use_translated:
-        source = rule.get('translated-source', 'any')
-        destination = rule.get('translated-destination', 'any')
-        service = rule.get('translated-service', 'any')
-    else:
-        source = rule.get('original-source', 'any')
-        destination = rule.get('original-destination', 'any')
-        service = rule.get('original-service', 'any')
-    
-    return f"access-list {acl_name} extended permit {service} {source} {destination}"
+    """Create ASA ACL for NAT rule - This function is no longer used but kept for reference"""
+    return ""  # Return empty string as we don't need ACLs anymore
 
 def format_asa_rule(rule: str, comment: str = None) -> str:
-    """Format an ASA rule with optional comment"""
-    if not rule:
-        return ""
-        
-    formatted = []
+    """Format ASA rule with comments"""
     if comment:
-        formatted.append(f"! {comment}")
-    formatted.append(rule)
-    formatted.append("")  # Add blank line after rule
-    
-    return "\n".join(formatted)
+        return f"! {comment}\n{rule}\n\n"
+    return f"{rule}\n\n"
 
 def log_unhandled_rule(logger: logging.Logger, rule: Dict[str, Any], reason: str):
     """Log an unhandled rule with details"""
@@ -327,6 +334,9 @@ class NATTranslator:
             'pool': PoolNATHandler()
         }
         
+        # Track processed rules to identify bidirectional pairs
+        self.processed_rules = {}
+        
         # Setup logging
         if log_file is None:
             log_file = f"nat_translation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -361,9 +371,118 @@ class NATTranslator:
             'failed': 0,
             'skipped': 0,
             'object_errors': 0,
-            'translation_errors': 0
+            'translation_errors': 0,
+            'bidirectional_pairs': 0,
+            'no_nat_pairs': 0
         }
         
+    def _is_no_nat_pair(self, rule1: Dict[str, Any], rule2: Dict[str, Any]) -> bool:
+        """Check if two rules form a No-NAT (Identity NAT) pair"""
+        # Get source and destination fields
+        src1 = rule1.get('original-source', '')
+        dst1 = rule1.get('original-destination', '')
+        trans_src1 = rule1.get('translated-source', '')
+        trans_dst1 = rule1.get('translated-destination', '')
+        
+        src2 = rule2.get('original-source', '')
+        dst2 = rule2.get('original-destination', '')
+        trans_src2 = rule2.get('translated-source', '')
+        trans_dst2 = rule2.get('translated-destination', '')
+        
+        # Check if both rules are No-NAT (all translated fields are 'original')
+        if not (trans_src1 == 'original' and trans_dst1 == 'original' and 
+                trans_src2 == 'original' and trans_dst2 == 'original'):
+            return False
+        
+        # Check if rules are No-NAT pairs
+        if (src1 == dst2 and dst1 == 'any' and src2 == 'any'):
+            return True
+            
+        if (src2 == dst1 and dst2 == 'any' and src1 == 'any'):
+            return True
+            
+        return False
+
+    def _find_no_nat_pairs(self, rules: List[Tuple[Dict[str, Any], str]]) -> List[Tuple[Dict[str, Any], str]]:
+        """Find and mark No-NAT rule pairs"""
+        processed_rules = []
+        no_nat_pairs = set()
+        
+        for i, (rule1, section1) in enumerate(rules):
+            if i in no_nat_pairs:
+                continue
+                
+            # Check if this rule is part of a No-NAT pair
+            for j, (rule2, section2) in enumerate(rules[i+1:], i+1):
+                if j in no_nat_pairs:
+                    continue
+                    
+                if self._is_no_nat_pair(rule1, rule2):
+                    # Mark both rules as part of a No-NAT pair
+                    rule1['is_no_nat_pair'] = True
+                    rule2['is_no_nat_pair'] = True
+                    no_nat_pairs.add(i)
+                    no_nat_pairs.add(j)
+                    self.stats['no_nat_pairs'] += 1
+                    self.logger.info(f"Found No-NAT pair: Rule {rule1.get('rule-number')} and Rule {rule2.get('rule-number')}")
+                    break
+            
+            processed_rules.append((rule1, section1))
+        
+        return processed_rules
+
+    def _is_bidirectional_pair(self, rule1: Dict[str, Any], rule2: Dict[str, Any]) -> bool:
+        """Check if two rules form a bidirectional pair"""
+        # Get source and destination fields
+        src1 = rule1.get('original-source', '')
+        dst1 = rule1.get('original-destination', '')
+        trans_src1 = rule1.get('translated-source', '')
+        trans_dst1 = rule1.get('translated-destination', '')
+        
+        src2 = rule2.get('original-source', '')
+        dst2 = rule2.get('original-destination', '')
+        trans_src2 = rule2.get('translated-source', '')
+        trans_dst2 = rule2.get('translated-destination', '')
+        
+        # Check if rules are bidirectional
+        if (src1 == trans_dst2 and dst1 == 'any' and trans_src1 == dst2 and trans_dst1 == 'original' and
+            src2 == 'any' and trans_src2 == 'original'):
+            return True
+            
+        if (src2 == trans_dst1 and dst2 == 'any' and trans_src2 == dst1 and trans_dst2 == 'original' and
+            src1 == 'any' and trans_src1 == 'original'):
+            return True
+            
+        return False
+
+    def _find_bidirectional_pairs(self, rules: List[Tuple[Dict[str, Any], str]]) -> List[Tuple[Dict[str, Any], str]]:
+        """Find and mark bidirectional rule pairs"""
+        processed_rules = []
+        bidirectional_pairs = set()
+        
+        for i, (rule1, section1) in enumerate(rules):
+            if i in bidirectional_pairs:
+                continue
+                
+            # Check if this rule is part of a bidirectional pair
+            for j, (rule2, section2) in enumerate(rules[i+1:], i+1):
+                if j in bidirectional_pairs:
+                    continue
+                    
+                if self._is_bidirectional_pair(rule1, rule2):
+                    # Mark both rules as part of a bidirectional pair
+                    rule1['is_bidirectional'] = True
+                    rule2['is_bidirectional'] = True
+                    bidirectional_pairs.add(i)
+                    bidirectional_pairs.add(j)
+                    self.stats['bidirectional_pairs'] += 1
+                    self.logger.info(f"Found bidirectional pair: Rule {rule1.get('rule-number')} and Rule {rule2.get('rule-number')}")
+                    break
+            
+            processed_rules.append((rule1, section1))
+        
+        return processed_rules
+
     def load_checkpoint_rules(self, file_path: str) -> List[Tuple[Dict[str, Any], str]]:
         """Load NAT rules from Checkpoint JSON file"""
         try:
@@ -443,7 +562,11 @@ class NATTranslator:
         asa_rules = []
         current_section = None
         
-        for rule, section_name in checkpoint_rules:
+        # Find and mark bidirectional pairs and No-NAT pairs
+        processed_rules = self._find_bidirectional_pairs(checkpoint_rules)
+        processed_rules = self._find_no_nat_pairs(processed_rules)
+        
+        for rule, section_name in processed_rules:
             rule_number = rule.get('rule-number', 0)
             
             # Add section header if section changes
@@ -462,6 +585,10 @@ class NATTranslator:
                         # Create rule comment with both comment and UUID
                         comment = rule.get('Comments', 'NA')
                         rule_comment = f"Rule {rule_number:04d}: {comment} | UUID: {rule.get('uid')}"
+                        if rule.get('is_bidirectional', False):
+                            rule_comment += " (Bidirectional)"
+                        if rule.get('is_no_nat_pair', False):
+                            rule_comment += " (No-NAT Pair)"
                         asa_rules.append(format_asa_rule(asa_rule, rule_comment))
                         self.logger.info(f"Rule {rule_number:04d} translated successfully to {nat_type} NAT")
                         self.stats['successful'] += 1
